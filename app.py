@@ -4,13 +4,12 @@ from streamlit_js_eval import get_geolocation
 from openlocationcode import openlocationcode as olc
 from streamlit_autorefresh import st_autorefresh
 
-# --- 1. CSS GÖRSEL DÜZENLEME (ŞEFFAFLAŞMAYI ENGELLER) ---
+# --- 1. GÖRSEL DÜZENLEME (ŞEFFAFLAŞMAYI ENGELLER) ---
 st.markdown(
     """
     <style>
     [data-testid="stAppViewBlockContainer"] { opacity: 1 !important; }
     .stApp { transition: none !important; }
-    /* Yüklenme ikonunu gizle (Üstteki dönen çember) */
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
@@ -29,28 +28,38 @@ if 'requested' not in st.session_state:
 
 st.set_page_config(page_title="Taksi İstiyorum 🚕", page_icon="🚕")
 
-# --- 3. TELEGRAM FONKSİYONLARI ---
+# --- 3. TELEGRAM DURUM OKUMA (GÜNCELLENDİ) ---
 def get_last_status():
     try:
         token = st.secrets["TELEGRAM_TOKEN"]
+        # offset=-1 ve limit=1 ile sadece en son atılan mesajı çekiyoruz
         url = f"https://api.telegram.org/bot{token}/getUpdates"
-        # Sadece son mesajı al
-        response = requests.get(url, params={"offset": -1, "limit": 1}, timeout=0.8).json()
-        if response["ok"] and response["result"]:
-            last_msg = response["result"][0]["message"].get("text", "").lower()
-            if "/onay" in last_msg: return "✅ Cemil gördü, Uber'i açıyor!"
-            if "/yolda" in last_msg:
+        response = requests.get(url, params={"offset": -1, "limit": 1}, timeout=1.5).json()
+        
+        if response.get("ok") and response.get("result"):
+            # En son gelen mesajın içeriği
+            last_msg = response["result"][0].get("message", {}).get("text", "").lower()
+            
+            if "/onay" in last_msg:
+                return "✅ Cemil gördü, Uber'i açıyor!"
+            elif "/yolda" in last_msg:
                 parts = last_msg.split()
                 dk = parts[1] if len(parts) > 1 else "?"
                 return f"🚗 Taksi yolda! ({dk} dk içinde yanında)"
+            elif "/iptal" in last_msg:
+                return "❌ Cemil şu an uygun değil, seni arayacak."
+        
         return "⌛ Cemil'den onay bekleniyor..."
-    except: return "⌛ Güncelleniyor..."
+    except Exception as e:
+        return f"⌛ Durum kontrol ediliyor..."
 
+# --- 4. TELEGRAM BİLDİRİM GÖNDERME ---
 def send_taxi_notif(user, location=None):
     try:
         token = st.secrets["TELEGRAM_TOKEN"]
         chat_id = st.secrets["TELEGRAM_CHAT_ID"]
         loc_info = "📍 Konum paylaşılamadı."
+        
         if location:
             lat, lon = location['coords']['latitude'], location['coords']['longitude']
             plus_code = olc.encode(lat, lon)
@@ -58,13 +67,13 @@ def send_taxi_notif(user, location=None):
             uber_url = f"uber://?action=setPickup&pickup[latitude]={lat}&pickup[longitude]={lon}"
             loc_info = f"📍 [Harita]({maps_url}) | [Uber'de Aç]({uber_url})\n🔢 Plus Code: `{plus_code}`"
 
-        msg = f"🚕 *YENİ TALEP!*\n👤 *Müşteri:* {user}\n\n{loc_info}\n\n/onay | /yolda 5"
+        msg = f"🚕 *YENİ TALEP!*\n👤 *Müşteri:* {user}\n\n{loc_info}\n\nOnay için: `/onay`\nSüre için: `/yolda 5`"
         requests.post(f"https://api.telegram.org/bot{token}/sendMessage", 
-                      data={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=1.5)
+                      data={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"}, timeout=2)
         return True
     except: return False
 
-# --- 4. ARAYÜZ ---
+# --- 5. ARAYÜZ ---
 
 if st.session_state.step == 'login':
     st.title("🚕 Taksi İstiyorum")
@@ -78,10 +87,9 @@ if st.session_state.step == 'login':
 elif st.session_state.step == 'request':
     st.title(f"Selam {st.session_state.name}! 👋")
     
-    # Konumu her zaman hazır tut
+    # Konumu arka planda hep güncel tut
     loc = get_geolocation()
     
-    # TAKSİ BUTONU (Burası bir kez basılınca requested True olur)
     if not st.session_state.requested:
         if st.button("🚖 TAKSİ İSTİYORUM", type="primary", use_container_width=True, key="t_btn"):
             if send_taxi_notif(st.session_state.name, loc):
@@ -89,18 +97,18 @@ elif st.session_state.step == 'request':
                 st.balloons()
                 st.rerun()
     
-    # CANLI DURUM BÖLÜMÜ (Sadece burası kendi içinde döner)
-    if st.session_state.requested:
+    else:
+        # TALEP GİTTİKTEN SONRA BURASI ÇALIŞIR
         st.success("Talebin Cemil'e iletildi! ❤️")
         st.divider()
         st.subheader("Canlı Durum")
         
-        # OTOMATİK YENİLEME (1 Saniye - Stabil hız)
+        # 1 Saniye Yenileme
         st_autorefresh(interval=1000, key="status_loop")
         
         status_msg = get_last_status()
         st.info(status_msg)
 
-    if st.button("Çıkış", key="exit_btn"):
+    if st.button("Çıkış / İptal", key="exit_btn"):
         st.session_state.clear()
         st.rerun()
