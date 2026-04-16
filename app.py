@@ -1,22 +1,13 @@
 import streamlit as st
 import requests
 
-# --- SAYFA AYARLARI ---
-st.set_page_config(
-    page_title="Taksi İstiyorum 🚕",
-    page_icon="🚕",
-    layout="centered"
-)
-
-# --- TELEGRAM FONKSİYONU ---
 def taxi_request_sent(user_name):
-    """Telegram botu üzerinden bildirim gönderir."""
+    """Hızlandırılmış mesaj gönderimi."""
     try:
-        # Secrets'tan bilgileri çekiyoruz
         token = st.secrets["TELEGRAM_TOKEN"]
         chat_id = st.secrets["TELEGRAM_CHAT_ID"]
         
-        message = f"🚕 *Taksi Talebi Geldi!*\n\n{user_name} şu an taksi bekliyor. Uber üzerinden aracı yönlendirebilirsin. ✨"
+        message = f"🚕 *Taksi Talebi!* \n\n{user_name} bekliyor."
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         
         payload = {
@@ -25,15 +16,21 @@ def taxi_request_sent(user_name):
             "parse_mode": "Markdown"
         }
         
-        response = requests.post(url, data=payload)
+        # timeout=2 ekleyerek bağlantının askıda kalmasını önlüyoruz. 
+        # Genelde Telegram milisaniyeler içinde yanıt verir.
+        response = requests.post(url, data=payload, timeout=2)
         return response.status_code == 200
-    except Exception as e:
-        st.error(f"Sistemsel bir hata oluştu: {e}")
+    except Exception:
+        # Hız için hatayı loglamak yerine sessizce geçebilir veya basit bir uyarı verebilirsin
         return False
 
-# --- SESSION STATE KONTROLÜ ---
-if 'step' not in st.session_state:
-    st.session_state.step = 'login'
+# Buton kısmında kullanımı:
+if st.button("🚖 TAKSİ İSTİYORUM", use_container_width=True, type="primary"):
+    # Spinner'ı kaldırıp direkt işlemi başlatıyoruz ki kullanıcı beklediğini hissetmesin
+    success = taxi_request_sent(st.session_state.name)
+    if success:
+        st.balloons()
+        st.success("Hemen ayarlıyorum! ❤️")
 if 'name' not in st.session_state:
     st.session_state.name = ""
 
