@@ -1,41 +1,43 @@
 import streamlit as st
 import requests
+from streamlit_js_eval import get_geolocation
 
-# --- 1. SESSION STATE BAŞLATMA (Hata Almamak İçin En Üstte Olmalı) ---
+# --- SESSION STATE ---
 if 'step' not in st.session_state:
     st.session_state.step = 'login'
 if 'name' not in st.session_state:
     st.session_state.name = ""
 
-# --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Taksi İstiyorum 🚕", page_icon="🚕")
 
-# --- HIZLANDIRILMIŞ TELEGRAM FONKSİYONU ---
-def send_taxi_notif(user):
+# --- HIZLI MESAJ FONKSİYONU ---
+def send_taxi_notif(user, location=None):
     try:
         token = st.secrets["TELEGRAM_TOKEN"]
         chat_id = st.secrets["TELEGRAM_CHAT_ID"]
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
         
-        payload = {
-            "chat_id": chat_id, 
-            "text": f"🚕 *Taksi Talebi!* \n\n{user} bekliyor. Uber'i aç!",
-            "parse_mode": "Markdown"
-        }
-        # timeout=1 ve stream=False yaparak en hızlı şekilde isteği bitiriyoruz
+        loc_text = "📍 Konum Paylaşılmadı"
+        if location:
+            lat = location['coords']['latitude']
+            lon = location['coords']['longitude']
+            # Google Haritalar linki oluşturuyoruz ki tek tıkla Uber'e girebilesin
+            loc_text = f"📍 Konum: https://www.google.com/maps?q={lat},{lon}"
+
+        message = f"🚕 *Taksi Talebi!*\n\n👤 {user}\n{loc_text}"
+        
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+        
         requests.post(url, data=payload, timeout=1.5)
         return True
     except:
         return False
 
-# --- UI MANTIĞI ---
-
+# --- UI ---
 if st.session_state.step == 'login':
     st.title("🚕 Taksi İstiyorum")
-    name_input = st.text_input("Lütfen ismini yaz:", key="main_name_input")
-    
-    # key="login_btn" ekleyerek Duplicate ID hatasını çözüyoruz
-    if st.button("Giriş Yap", key="login_btn", use_container_width=True):
+    name_input = st.text_input("İsim:", key="name_in")
+    if st.button("Giriş Yap", key="btn_l"):
         if name_input:
             st.session_state.name = name_input
             st.session_state.step = 'request'
@@ -44,17 +46,17 @@ if st.session_state.step == 'login':
 elif st.session_state.step == 'request':
     st.title(f"Selam {st.session_state.name}! 👋")
     
-    # Ana Taksi Butonu - key="taxi_btn" ile hata engellendi
-    if st.button("🚖 TAKSİ İSTİYORUM", key="taxi_btn", type="primary", use_container_width=True):
-        # Kullanıcıyı bekletmemek için direkt görsel geri bildirim veriyoruz
-        with st.status("Mesaj gönderiliyor...", expanded=False) as status:
-            if send_taxi_notif(st.session_state.name):
-                status.update(label="Bildirim bana ulaştı! ❤️", state="complete")
+    # Arka planda konumu almaya başla (Kullanıcıdan izin isteyecek)
+    loc = get_geolocation()
+    
+    if st.button("🚖 TAKSİ İSTİYORUM", key="btn_t", type="primary", use_container_width=True):
+        with st.status("Mesaj ve konum gönderiliyor...") as status:
+            if send_taxi_notif(st.session_state.name, loc):
+                status.update(label="Bildirim ve konum iletildi! ❤️", state="complete")
                 st.balloons()
             else:
-                status.update(label="Gönderilemedi, tekrar dene.", state="error")
+                status.update(label="Hata oluştu!", state="error")
 
-    # Geri dönme butonu - key="back_btn"
-    if st.button("İsim Değiştir", key="back_btn"):
+    if st.button("İsim Değiştir", key="btn_b"):
         st.session_state.step = 'login'
         st.rerun()
