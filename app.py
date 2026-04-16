@@ -27,9 +27,9 @@ if 'requested' not in st.session_state:
 if 'request_time' not in st.session_state:
     st.session_state.request_time = 0
 
-st.set_page_config(page_title="Taksi İstiyorum 🚕", page_icon="🚕")
+st.set_page_config(page_title="Taksi Paneli 🚕", page_icon="🚕")
 
-# --- 3. TELEGRAM DURUM OKUMA (RED KOMUTU EKLENDİ) ---
+# --- 3. TELEGRAM DURUM OKUMA ---
 def get_last_status():
     try:
         token = st.secrets["TELEGRAM_TOKEN"]
@@ -38,8 +38,6 @@ def get_last_status():
         
         if response.get("ok") and response.get("result"):
             update = response["result"][0]
-            
-            # Callback (Buton) veya normal mesaj kontrolü
             if "callback_query" in update:
                 last_msg = update["callback_query"]["data"].lower()
                 msg_time = update["callback_query"]["message"]["date"]
@@ -49,49 +47,38 @@ def get_last_status():
             else:
                 return "⌛ Cemil'den onay bekleniyor..."
 
-            # Zaman kontrolü
             if msg_time < st.session_state.request_time:
                 return "⌛ Cemil'den onay bekleniyor..."
             
-            # KOMUTLAR
-            if "/onay" in last_msg:
-                return "✅ Cemil gördü, Uber'i açıyor!"
-            elif "/red" in last_msg:
-                return "❌ Cemil şu an müsait değil veya taksi yok, seni arayacak."
-            elif "/yolda" in last_msg:
+            if "/onay" in last_msg: return "✅ Cemil gördü, Uber'i açıyor!"
+            if "/red" in last_msg: return "❌ Cemil şu an müsait değil, seni arayacak."
+            if "/yolda" in last_msg:
                 parts = last_msg.split()
                 dk = parts[1] if len(parts) > 1 else "?"
                 return f"🚗 Taksi yolda! ({dk} dk içinde yanında)"
-        
         return "⌛ Cemil'den onay bekleniyor..."
-    except:
-        return "⌛ Durum kontrol ediliyor..."
+    except: return "⌛ Durum kontrol ediliyor..."
 
-# --- 4. BİLDİRİM GÖNDERME (RED BUTONU DAHİL) ---
-def send_taxi_notif(user, location=None):
+# --- 4. BİLDİRİM GÖNDERME ---
+def send_taxi_notif(user, location):
     try:
         token = st.secrets["TELEGRAM_TOKEN"]
         chat_id = st.secrets["TELEGRAM_CHAT_ID"]
-        loc_info = "📍 Konum paylaşılamadı."
         
-        if location:
-            lat, lon = location['coords']['latitude'], location['coords']['longitude']
-            plus_code = olc.encode(lat, lon)
-            maps_url = f"https://www.google.com/maps?q={lat},{lon}"
-            uber_url = f"uber://?action=setPickup&pickup[latitude]={lat}&pickup[longitude]={lon}"
-            loc_info = f"📍 [Harita]({maps_url}) | [Uber'de Aç]({uber_url})\n🔢 Code: `{plus_code}`"
+        # Konum verisi kontrolü
+        if not location or 'coords' not in location:
+            return False, "Konum verisi alınamadı!"
 
-        # INLINE KEYBOARD (Red butonu eklendi)
+        lat, lon = location['coords']['latitude'], location['coords']['longitude']
+        plus_code = olc.encode(lat, lon)
+        maps_url = f"https://www.google.com/maps?q={lat},{lon}"
+        uber_url = f"uber://?action=setPickup&pickup[latitude]={lat}&pickup[longitude]={lon}"
+        loc_info = f"📍 [Harita]({maps_url}) | [Uber'de Aç]({uber_url})\n🔢 Code: `{plus_code}`"
+
         keyboard = {
             "inline_keyboard": [
-                [
-                    {"text": "✅ Onayla", "callback_data": "/onay"},
-                    {"text": "❌ Red (Taksi Yok)", "callback_data": "/red"}
-                ],
-                [
-                    {"text": "🚗 5 Dakika", "callback_data": "/yolda 5"},
-                    {"text": "🚗 10 Dakika", "callback_data": "/yolda 10"}
-                ]
+                [{"text": "✅ Onayla", "callback_data": "/onay"}, {"text": "❌ Red", "callback_data": "/red"}],
+                [{"text": "🚗 5 Dakika", "callback_data": "/yolda 5"}, {"text": "🚗 10 Dakika", "callback_data": "/yolda 10"}]
             ]
         }
 
@@ -103,8 +90,9 @@ def send_taxi_notif(user, location=None):
         }
         
         requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data=payload, timeout=2)
-        return True
-    except: return False
+        return True, "Başarılı"
+    except Exception as e:
+        return False, str(e)
 
 # --- 5. ARAYÜZ ---
 if st.session_state.step == 'login':
@@ -118,28 +106,35 @@ if st.session_state.step == 'login':
 
 elif st.session_state.step == 'request':
     st.title(f"Selam {st.session_state.name}! 👋")
-    loc = get_geolocation()
+    
+    # KONUMU AL (Burada kritik bir bekleme yapıyoruz)
+    with st.spinner('Konum belirleniyor...'):
+        loc = get_geolocation()
     
     if not st.session_state.requested:
-        if st.button("🚖 TAKSİ İSTİYORUM", type="primary", use_container_width=True):
-            if send_taxi_notif(st.session_state.name, loc):
+        # Konum gelene kadar buton sönük (disabled) olur
+        is_disabled = loc is None
+        
+        if is_disabled:
+            st.warning("📍 Konumunuzun belirlenmesi bekleniyor. Lütfen tarayıcıdan izin verin.")
+        
+        if st.button("🚖 TAKSİ İSTİYORUM", type="primary", use_container_width=True, disabled=is_disabled):
+            success, error_msg = send_taxi_notif(st.session_state.name, loc)
+            if success:
                 st.session_state.request_time = int(time.time())
                 st.session_state.requested = True
                 st.balloons()
                 st.rerun()
+            else:
+                st.error(f"Hata: {error_msg}")
     else:
         st.success("Talebin Cemil'e iletildi! ❤️")
         st_autorefresh(interval=1000, key="status_loop")
-        
         st.divider()
         st.subheader("Canlı Durum")
         status_msg = get_last_status()
-        
-        # Eğer red gelirse kırmızı, diğerleri mavi görünsün
-        if "❌" in status_msg:
-            st.error(status_msg)
-        else:
-            st.info(status_msg)
+        if "❌" in status_msg: st.error(status_msg)
+        else: st.info(status_msg)
 
     if st.button("Çıkış / Yeni Talep"):
         st.session_state.clear()
